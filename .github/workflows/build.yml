@@ -16,20 +16,34 @@ jobs:
     timeout-minutes: 500
     container:
       image: ghcr.io/eebssk1/debian-trixie:latest
-      options: --privileged
+      # /root -> /user 是 swap.sh 建立容器->宿主机免密 ssh 的前提
+      options: --privileged --volume /root:/user
     steps:
       - name: updateNinstall
         run: |
           apt-get -y update && apt-get -y upgrade --autoremove --purge
-          apt-get -y install curl python3 ninja-build bzip2 tar xz-utils git pkg-config cmake
+          apt-get -y install curl python3 ninja-build bzip2 tar xz-utils git pkg-config cmake openssh-client iproute2
 
-      - name: setup swap for lto
+      - name: checkout ci scripts
+        uses: actions/checkout@v4
+
+      - name: host tuning (swap/sysctl/zswap)
+        # swap.sh 通过 ssh root@<docker 网关> 到宿主机做 vm.*/zswap/sched 调优。
+        # 依赖：容器 options 里的 --volume /root:/user（否则脚本打印提示后 exit 0，
+        # 不做任何调优）；以及宿主机 sshd 允许 root 公钥登录（首次会自动写入
+        # /user/.ssh/authorized_keys）。托管 runner 上 sshd 不可达时不应阻塞构建。
+        continue-on-error: true
         run: |
-          fallocate -l 10G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=10240
-          chmod 600 /swapfile
-          mkswap /swapfile
-          swapon /swapfile || true
+          sh ./swap.sh
+          echo "--- swap state (kernel-global) ---"
+          swapon --show || true
           free -h
+          # swap.sh 依赖宿主机 sshd（自托管 runner 场景）。托管 runner 上通常连不上，
+          # 本步骤会因 continue-on-error 而放行，但那样就没有 7G swap，
+          # 后面 --enable-lto 的链接阶段大概率被 OOM killer 杀掉，故此处显式告警。
+          if ! swapon --show | grep -q swap; then
+            echo "::warning::no active swap detected - GCC LTO link may OOM (exit 137)"
+          fi
 
       - name: load toolchain
         run: curl -sL "https://github.com/eebssk1/aio_tc_build/releases/latest/download/x86_64-linux-gnu-native.tb2" | tar -C /opt --bz -x

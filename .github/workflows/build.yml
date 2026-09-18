@@ -1,0 +1,121 @@
+name: build
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+    inputs:
+      node_ref:
+        description: 'Node.js Git Branch or Tag (e.g., v24.x, v22.x)'
+        required: true
+        default: 'v24.21.0'
+
+jobs:
+  build-x86:
+    runs-on: ubuntu-latest
+    timeout-minutes: 500
+    container:
+      image: ghcr.io/eebssk1/debian-trixie:latest
+      options: --privileged
+    steps:
+      - name: updateNinstall
+        run: |
+          apt-get -y update && apt-get -y upgrade --autoremove --purge
+          apt-get -y install curl python3 ninja-build bzip2 tar xz-utils git pkg-config cmake
+
+      - name: setup swap for lto
+        run: |
+          fallocate -l 10G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=10240
+          chmod 600 /swapfile
+          mkswap /swapfile
+          swapon /swapfile || true
+          free -h
+
+      - name: load toolchain
+        run: curl -sL "https://github.com/eebssk1/aio_tc_build/releases/latest/download/x86_64-linux-gnu-native.tb2" | tar -C /opt --bz -x
+
+      - name: build mimalloc
+        # THP 注意：不要加 -DMI_NO_THP=ON 或 -DMI_ALLOW_THP=OFF（等效：运行时
+        # MIMALLOC_ALLOW_THP=0）——那会执行进程级 prctl(PR_SET_THP_DISABLE,1)，
+        # 使 Node 运行时 --use-largepages 对 .text 段的 madvise(MADV_HUGEPAGE) 静默失效。
+        # v3.5.3 在 Linux 下默认 MI_ALLOW_THP=FULL（MI_DEFAULT_ALLOW_THP=2，已实测），
+        # 不会禁用 THP，且 mimalloc 堆与 Node .text 段互不重叠，两者可安全共存。
+        # MI_OPT_ARCH=ON 会给 mimalloc 注入 -march=haswell（+avx2），与下方 Node 主
+        # flags 的 -march=haswell 一致，产物最低 CPU 要求同为 Haswell，无额外约束。
+        run: |
+          export PATH=/opt/x86_64-linux-gnu/bin:$PATH
+          git -c advice.detachedHead=false clone --depth=1 -b v3.5.3 https://github.com/microsoft/mimalloc.git mimalloc-src
+          cmake -B mimalloc-src/build -S mimalloc-src \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_FLAGS="-mtune=broadwell" \
+            -DMI_BUILD_SHARED=OFF \
+            -DMI_BUILD_STATIC=ON \
+            -DMI_BUILD_OBJECT=OFF \
+            -DMI_BUILD_TESTS=OFF \
+            -DMI_OVERRIDE=ON \
+            -DMI_OPT_ARCH=ON \
+            -DMI_OPT_SIMD=ON
+          cmake --build mimalloc-src/build -j$(nproc)
+
+      - name: checkout nodejs
+        uses: actions/checkout@v4
+        with:
+          repository: nodejs/node
+          ref: ${{ github.event.inputs.node_ref || 'v24.21.0' }}
+          path: node-src
+
+      - name: build
+        working-directory: node-src
+        run: |
+          export PATH="/opt/x86_64-linux-gnu/bin:$PATH"
+          export CC="gcc"
+          export CXX="g++"
+
+          export F="-O3 -Wa,-O2 -D__1ENABLE_AGGRESSIVE_GRAPHITE9__ -fno-math-errno -march=haswell -mtune=broadwell -flimit-function-alignment -falign-loops=32:16:16:11 -falign-jumps=32:16:16:11 -falign-functions=32:18:16:12 -fmin-function-alignment=8 -ffunction-sections -fdata-sections"
+          export CFLAGS="$F"
+          export CXXFLAGS="$F"
+
+          # Force mimalloc static archive into binary to override glibc malloc
+          export MI_LIB="$GITHUB_WORKSPACE/mimalloc-src/build/libmimalloc.a"
+          export LDFLAGS="-Wl,--whole-archive $MI_LIB -Wl,--no-whole-archive -Wl,--gc-sections -lpthread -lrt -Wl,-O3,--relax"
+
+          ./configure \
+            --ninja \
+            --dest-cpu=x64 \
+            --enable-lto
+
+          ninja -C out/Release -j$(nproc)
+
+          # 验证 mimalloc 覆盖符号已链入（malloc/free/mi_malloc 应为 T 强符号；
+          # 若 LTO 把 mi_ 前缀符号内联，至少 malloc/free 必须存在）
+          nm -C out/Release/node | grep -E " T (mi_malloc|malloc|free)$"
+
+          # 正确用法：--dest-dir 相当于 DESTDIR，--prefix "" 使其成为最终根
+          python3 tools/install.py install --dest-dir "$PWD/dist" --prefix ""
+
+      - name: pack
+        run: |
+          mv node-src/dist node-x86
+          tar --bz -cf node-lts-x86.tb2 -C $PWD node-x86
+
+      - name: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-lts-x86
+          path: "node-x86/*"
+
+      - name: delete tag if exists
+        uses: ClementTsang/delete-tag-and-release@v0.4.0
+        continue-on-error: true
+        with:
+          delete_release: true
+          tag_name: ${{ github.event.inputs.node_ref || 'v24.21.0' }}
+
+      - name: release
+        uses: ncipollo/release-action@v1
+        with:
+          allowUpdates: true
+          artifacts: "*.tb2"
+          commit: main
+          makeLatest: true
+          tag: ${{ github.event.inputs.node_ref || 'v24.21.0' }}

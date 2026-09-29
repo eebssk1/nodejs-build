@@ -61,7 +61,7 @@ jobs:
           git -c advice.detachedHead=false clone --depth=1 -b v3.5.3 https://github.com/microsoft/mimalloc.git mimalloc-src
           cmake -B mimalloc-src/build -S mimalloc-src \
             -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_FLAGS="-mtune=broadwell -Wa,-O2 -D__1ENABLE_AGGRESSIVE_GRAPHITE9__ -fno-math-errno -flimit-function-alignment -falign-loops=32:16:16:11 -falign-jumps=32:16:16:11 -falign-functions=32:18:16:12 -fmin-function-alignment=8 -ffunction-sections -fdata-sections" \
+            -DCMAKE_C_FLAGS="-Wa,-O2 -D__1ENABLE_AGGRESSIVE_GRAPHITE9__ -fno-math-errno -falign-loops=32:16:16:11 -flimit-function-alignment -ffunction-sections -fdata-sections" \
             -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=TRUE \
             -DCMAKE_AR="gcc-ar" \
             -DCMAKE_NM="gcc-nm" \
@@ -91,13 +91,13 @@ jobs:
           export AR="gcc-ar"
           export NM="gcc-nm"
 
-          export F="-O3 -Wa,-O2 -D__1ENABLE_AGGRESSIVE_GRAPHITE9__ -fno-math-errno -march=haswell -mtune=broadwell -flimit-function-alignment -falign-loops=32:16:16:11 -falign-jumps=32:16:16:11 -falign-functions=32:18:16:12 -fmin-function-alignment=8 -ffunction-sections -fdata-sections"
+          export F="-O3 -Wa,-O2 -D__1ENABLE_AGGRESSIVE_GRAPHITE9__ -fno-math-errno -march=haswell -mtune=broadwell -flimit-function-alignment -falign-loops=32:16:16:11 -ffunction-sections -fdata-sections"
           export CFLAGS="$F"
           export CXXFLAGS="$F"
 
           # Force mimalloc static archive into binary to override glibc malloc
           export MI_LIB="$GITHUB_WORKSPACE/mimalloc-src/build/libmimalloc.a"
-          export LDFLAGS="-Wl,--whole-archive $MI_LIB -Wl,--no-whole-archive -Wl,--gc-sections -lpthread -lrt -Wl,-O3,--relax"
+          export LDFLAGS="-Wl,--whole-archive $MI_LIB -Wl,--no-whole-archive -Wl,--gc-sections -lpthread -lrt -Wl,-O3"
           export LDFLAGS="$LDFLAGS -Wl,--export-dynamic-symbol=malloc -Wl,--export-dynamic-symbol=calloc -Wl,--export-dynamic-symbol=realloc -Wl,--export-dynamic-symbol=free -Wl,--export-dynamic-symbol=posix_memalign -Wl,--export-dynamic-symbol=aligned_alloc -Wl,--export-dynamic-symbol=malloc_usable_size -Wl,-u,malloc -Wl,-u,free"
 
           ./configure \

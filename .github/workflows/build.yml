@@ -91,7 +91,7 @@ jobs:
           export AR="gcc-ar"
           export NM="gcc-nm"
 
-          export F="-O3 -Wa,-O2 -D__1ENABLE_AGGRESSIVE_GRAPHITE9__ -fno-math-errno -march=haswell -mtune=broadwell -flimit-function-alignment -falign-loops=32:16:16:11 -ffunction-sections -fdata-sections"
+          export F="-O3 -Wa,-O2 -D__1ENABLE_AGGRESSIVE_GRAPHITE9__ -fno-math-errno -march=haswell -mtune=broadwell -fprofile-partial-training -fipa-reorder-for-locality -flimit-function-alignment -falign-loops=32:16:16:11 -ffunction-sections -fdata-sections"
           export CFLAGS="$F"
           export CXXFLAGS="$F"
 

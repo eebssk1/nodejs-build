@@ -82,6 +82,10 @@ jobs:
           ref: ${{ github.event.inputs.node_ref || 'v24.21.0' }}
           path: node-src
 
+      - name: fix GCC PGO TLS address folding in Abseil
+        # Apply before BOTH PGO phases: patching after training breaks profiles.
+        run: python3 scripts/fix-abseil-tls.py node-src
+
       - name: build (GCC PGO + LTO)
         working-directory: node-src
         run: |
